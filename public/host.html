@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jukebox Host</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@700&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .host { max-width: 1280px; margin: 0 auto; display: grid; gap: 24px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 900px) { .host { grid-template-columns: minmax(0, 1fr); } }
+  .stage { display: grid; gap: 16px; }
+  .screen { position: relative; aspect-ratio: 16/9; max-width: 100%; background: var(--sunk); border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+  .screen iframe, #player { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .start {
+    position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px;
+    background: var(--sunk); text-align: center; padding: 20px; z-index: 2;
+  }
+  .start button { font-size: 18px; padding: 14px 28px; }
+  .now-big .title { font-size: clamp(22px, 3vw, 34px); }
+  .now-big .now { grid-template-columns: 1fr; }
+  .now-big .now img { display: none; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  .side { display: grid; gap: 16px; }
+  .join { display: grid; grid-template-columns: 128px 1fr; gap: 16px; align-items: center; }
+  .join > div { min-width: 0; }
+  #qr { background: #fff; padding: 8px; border-radius: 8px; width: 128px; height: 128px; }
+  #qr img, #qr canvas { width: 112px !important; height: 112px !important; }
+  .big-code { font-family: var(--font-mono); font-size: 34px; font-weight: 700; letter-spacing: .18em; color: var(--accent); }
+  #join-url { word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="host">
+  <div class="stage">
+    <header class="topbar">
+      <a class="brand" href="/"><img src="/Soundsmith.webp" alt="Soundsmith"></a>
+      <span class="small muted">Host screen · keep this tab open</span>
+    </header>
+    <div class="screen">
+      <div id="player"></div>
+      <div class="start" id="start">
+        <h2 style="color:var(--fg);font-size:22px;font-family:var(--font-display);text-transform:none;letter-spacing:0">Ready when you are</h2>
+        <p class="muted">Your browser needs one click before it will play sound.</p>
+        <button class="btn-primary" id="start-btn">Start the music</button>
+      </div>
+    </div>
+    <div class="now-big" id="now"></div>
+    <div class="controls">
+      <button id="skip">Skip song</button>
+      <button id="pause">Pause</button>
+    </div>
+    <section class="panel">
+      <h2>Add a song</h2>
+      <form id="add-form" class="row">
+        <label for="add-input" hidden>Song link or search</label>
+        <input id="add-input" type="text" placeholder="Paste a YouTube link" autocomplete="off">
+        <button class="btn-primary" type="submit">Add</button>
+      </form>
+      <p class="small muted" id="add-hint"></p>
+      <ul class="results" id="results"></ul>
+    </section>
+  </div>
+
+  <aside class="side">
+    <section class="panel join">
+      <div id="qr" aria-label="QR code to join"></div>
+      <div>
+        <h2>Scan to add songs</h2>
+        <div class="big-code" id="code">····</div>
+        <p class="small muted" id="join-url"></p>
+      </div>
+    </section>
+    <section style="display:grid;gap:10px">
+      <h2>Up next</h2>
+      <ul class="queue" id="queue"></ul>
+    </section>
+    <section class="panel">
+      <h2>Recently played</h2>
+      <ul class="history" id="history"></ul>
+    </section>
+  </aside>
+</div>
+<p id="error" class="empty" hidden></p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+  const code = location.pathname.split("/").pop().toUpperCase();
+  const hostKey = JB.store("jb-host-" + code);
+  const $ = (id) => document.getElementById(id);
+  const socket = io();
+  let state = null, player = null, playerReady = false, started = false, loadedId = null;
+
+  const joinUrl = location.origin + "/r/" + code;
+  $("code").textContent = code;
+  $("join-url").textContent = joinUrl.replace(/^https?:\/\//, "");
+  try { new QRCode($("qr"), { text: joinUrl, width: 112, height: 112, colorDark: "#1b0f12", colorLight: "#ffffff" }); } catch (_) {}
+
+  const updateHint = JB.wireAdd(socket, () => state, () => "Host");
+
+  // ---- YouTube player ----
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player("player", {
+      playerVars: { autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
+      events: {
+        onReady: () => { playerReady = true; syncPlayer(); },
+        onStateChange: (e) => {
+          if (e.data === YT.PlayerState.ENDED && state?.nowPlaying) socket.emit("ended", { videoId: state.nowPlaying.videoId });
+          $("pause").textContent = e.data === YT.PlayerState.PAUSED ? "Resume" : "Pause";
+        },
+        onError: () => {
+          // Some videos block embedding. Skip them automatically.
+          if (state?.nowPlaying) { JB.toast("That video can't play outside YouTube. Skipping."); socket.emit("ended", { videoId: state.nowPlaying.videoId }); }
+        },
+      },
+    });
+  };
+  const tag = document.createElement("script");
+  tag.src = "https://www.youtube.com/iframe_api";
+  document.head.appendChild(tag);
+
+  function syncPlayer() {
+    if (!playerReady || !started) return;
+    const n = state?.nowPlaying;
+    if (!n) { if (loadedId) { player.stopVideo(); loadedId = null; } return; }
+    if (n.videoId !== loadedId) { loadedId = n.videoId; player.loadVideoById(n.videoId); }
+  }
+
+  $("start-btn").addEventListener("click", () => {
+    started = true; $("start").hidden = true;
+    syncPlayer();
+    if (playerReady && loadedId) player.playVideo();
+  });
+  $("skip").addEventListener("click", () => socket.emit("skip"));
+  $("pause").addEventListener("click", () => {
+    if (!playerReady) return;
+    player.getPlayerState() === YT.PlayerState.PAUSED ? player.playVideo() : player.pauseVideo();
+  });
+
+  function render() {
+    JB.renderNow($("now"), state);
+    JB.renderQueue($("queue"), state, { canVote: false, canRemove: true });
+    updateHint(state);
+    $("history").innerHTML = state.history.length
+      ? state.history.map((h) => `<li>${JB.esc(h.sel)} · ${JB.esc(h.title)} <span>(${JB.esc(h.addedBy)})</span></li>`).join("")
+      : `<li>Nothing yet.</li>`;
+    syncPlayer();
+  }
+
+  $("queue").addEventListener("click", (e) => {
+    const r = e.target.closest("[data-remove]");
+    if (r) socket.emit("remove", { itemId: r.dataset.remove, clientId: JB.clientId });
+  });
+
+  socket.on("connect", () => {
+    socket.emit("join", { code, hostKey }, (res) => {
+      if (res.error) { document.querySelector(".host").hidden = true; $("error").textContent = res.error; $("error").hidden = false; return; }
+      if (!res.isHost) { location.href = "/r/" + code; return; } // not the host on this device
+      state = res.state; render();
+    });
+  });
+  socket.on("state", (s) => { state = s; render(); });
+</script>
+</body>
+</html>

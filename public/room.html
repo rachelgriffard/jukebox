@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jukebox Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@700&display=swap">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="wrap">
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/Soundsmith.webp" alt="Soundsmith"></a>
+    <span class="code-chip" id="code">····</span>
+  </header>
+
+  <section class="panel" id="name-panel" hidden>
+    <h2>Your name</h2>
+    <form id="name-form" class="row">
+      <label for="name-input" hidden>Your name</label>
+      <input id="name-input" type="text" maxlength="24" placeholder="So people know who picked what">
+      <button class="btn-primary" type="submit">Join</button>
+    </form>
+  </section>
+
+  <div id="main" hidden>
+    <div class="wrap">
+      <section class="panel">
+        <div id="now"></div>
+        <button id="skip-btn" type="button">Vote to skip</button>
+      </section>
+
+      <section class="panel">
+        <h2>Add a song</h2>
+        <form id="add-form" class="row">
+          <label for="add-input" hidden>Song link or search</label>
+          <input id="add-input" type="text" placeholder="Paste a YouTube link" autocomplete="off">
+          <button class="btn-primary" type="submit">Add</button>
+        </form>
+        <p class="small muted" id="add-hint"></p>
+        <ul class="results" id="results"></ul>
+      </section>
+
+      <section style="display:grid;gap:10px">
+        <h2>Up next</h2>
+        <ul class="queue" id="queue"></ul>
+      </section>
+
+      <p class="small muted">Signed in as <strong id="me"></strong> · <button class="link-btn" id="rename" type="button">change name</button></p>
+    </div>
+  </div>
+
+  <p id="error" class="empty" hidden></p>
+</main>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+  const code = location.pathname.split("/").pop().toUpperCase();
+  document.getElementById("code").textContent = code;
+  const socket = io();
+  let state = null;
+  let name = JB.store("jb-name") || "";
+
+  const $ = (id) => document.getElementById(id);
+  const updateHint = JB.wireAdd(socket, () => state, () => name);
+
+  function render() {
+    if (!state) return;
+    JB.renderNow($("now"), state);
+    JB.renderQueue($("queue"), state, { canVote: true, canRemove: false });
+    updateHint(state);
+    const n = state.nowPlaying;
+    $("skip-btn").hidden = !n;
+    if (n) $("skip-btn").textContent = `Vote to skip (${n.skipVotes}/${n.skipNeeded})`;
+  }
+
+  function showMain() {
+    $("name-panel").hidden = true;
+    $("main").hidden = false;
+    $("me").textContent = name;
+  }
+
+  $("name-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("name-input").value.trim();
+    if (!v) return JB.toast("Type a name first.");
+    name = v; JB.store("jb-name", v); showMain();
+  });
+  $("rename").addEventListener("click", () => {
+    $("name-input").value = name; $("main").hidden = true; $("name-panel").hidden = false; $("name-input").focus();
+  });
+
+  $("queue").addEventListener("click", (e) => {
+    const v = e.target.closest("[data-vote]");
+    if (v) {
+      const item = state.queue.find((q) => q.id === v.dataset.id);
+      const current = item?.votes[JB.clientId] || 0;
+      const value = Number(v.dataset.vote);
+      socket.emit("vote", { itemId: v.dataset.id, value: current === value ? 0 : value, clientId: JB.clientId });
+    }
+    const r = e.target.closest("[data-remove]");
+    if (r) socket.emit("remove", { itemId: r.dataset.remove, clientId: JB.clientId });
+  });
+  $("skip-btn").addEventListener("click", () => socket.emit("vote-skip", { clientId: JB.clientId }));
+
+  function join() {
+    socket.emit("join", { code }, (res) => {
+      if (res.error) { $("error").textContent = res.error; $("error").hidden = false; $("main").hidden = true; $("name-panel").hidden = true; return; }
+      state = res.state;
+      if (name) showMain(); else { $("name-panel").hidden = false; $("name-input").focus(); }
+      render();
+    });
+  }
+  socket.on("connect", join); // also re-joins after a dropped connection
+  socket.on("state", (s) => { state = s; render(); });
+</script>
+</body>
+</html>

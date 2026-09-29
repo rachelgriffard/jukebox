@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crowd Jukebox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@700&display=swap">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .hero { display: grid; gap: 14px; padding-block: 24px 8px; }
+  .hero h1 { font-size: clamp(38px, 10vw, 64px); }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: 17px; max-width: 34em; }
+  .steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  #join-code { text-transform: uppercase; font-family: var(--font-mono); letter-spacing: .2em; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <section class="hero">
+    <h1>Everyone picks.<br><em>The crowd decides.</em></h1>
+    <p class="lede">Start a jukebox on the screen with the speakers. Friends scan a code, add YouTube songs from their phones, and vote on what plays next.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Hosting</h2>
+    <p>Open this on the laptop or TV that will play the music.</p>
+    <button id="create" class="btn-primary">Start a jukebox</button>
+  </section>
+
+  <section class="panel">
+    <h2>Joining</h2>
+    <form id="join-form" class="row">
+      <label for="join-code" hidden>Room code</label>
+      <input id="join-code" type="text" maxlength="4" placeholder="ABCD" autocomplete="off">
+      <button type="submit">Join</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>How the queue works</h2>
+    <ol class="steps">
+      <li>Adding a song counts as your upvote.</li>
+      <li>Highest score plays next. Ties go to whoever added first.</li>
+      <li>A song that drops to −3 is removed.</li>
+      <li>Three guests voting to skip ends the current song early.</li>
+    </ol>
+  </section>
+</main>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/common.js"></script>
+<script>
+  const socket = io();
+  document.getElementById("create").addEventListener("click", () => {
+    const hostKey = JB.randomId(16);
+    socket.emit("create-room", { hostKey }, (res) => {
+      if (res.error) return JB.toast(res.error);
+      JB.store("jb-host-" + res.code, hostKey);
+      location.href = "/host/" + res.code;
+    });
+  });
+  document.getElementById("join-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const code = document.getElementById("join-code").value.trim().toUpperCase();
+    if (code.length === 4) location.href = "/r/" + code;
+    else JB.toast("Room codes are 4 letters.");
+  });
+</script>
+</body>
+</html>

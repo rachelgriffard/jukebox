@@ -1,0 +1,16 @@
+{
+  "name": "crowd-jukebox",
+  "version": "1.0.0",
+  "description": "A shared YouTube jukebox: guests add songs and vote on what plays next.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
